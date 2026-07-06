@@ -1,6 +1,6 @@
 import os
 import re
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import requests
 from flask import Flask, request, jsonify, Response, stream_with_context
@@ -42,11 +42,18 @@ def health():
 @app.post("/api/fetch-video")
 def fetch_video():
     data = request.get_json(silent=True) or {}
-    shopee_url = data.get("shopeeUrl")
-    csrf_token = data.get("csrfToken")
+    shopee_url_raw = (data.get("shopeeUrl") or "").strip()
+    csrf_token_raw = (data.get("csrfToken") or "").strip()
 
-    if not shopee_url or not csrf_token:
+    if not shopee_url_raw or not csrf_token_raw:
         return jsonify({"error": "Thiếu link Shopee hoặc csrf_token."}), 400
+
+    # Chuẩn hoá: nếu người dùng lỡ dán giá trị ĐÃ url-encode (copy từ thanh địa chỉ
+    # thay vì từ ô Query String Parameters đã decode sẵn của DevTools), unquote()
+    # sẽ giải mã nó về dạng gốc; nếu giá trị đã ở dạng thường thì unquote() không
+    # làm gì cả. Nhờ vậy tránh bị encode 2 lần (ví dụ %3A thành %253A).
+    shopee_url = unquote(shopee_url_raw)
+    csrf_token = unquote(csrf_token_raw)
 
     api_url = (
         "https://svxtract.com/apiv3.php?"
@@ -60,8 +67,15 @@ def fetch_video():
         return jsonify({"error": "Không kết nối được tới nguồn video. Thử lại sau."}), 500
 
     if not upstream.ok:
+        body_preview = upstream.text[:400]
+        app.logger.warning("upstream %s error, body: %s", upstream.status_code, body_preview)
         return jsonify({
-            "error": f"Nguồn trả lỗi (HTTP {upstream.status_code}). Token có thể đã hết hạn, thử lấy token mới."
+            "error": f"Nguồn trả lỗi (HTTP {upstream.status_code}).",
+            # Trả kèm nội dung lỗi thật từ svxtract.com để debug nguyên nhân
+            # chính xác (session/cookie, IP, token dùng 1 lần...) thay vì đoán.
+            # Có thể bỏ field này khi mọi thứ đã chạy ổn, tránh lộ chi tiết ra UI công khai.
+            "upstream_status": upstream.status_code,
+            "upstream_body": body_preview,
         }), 502
 
     try:
