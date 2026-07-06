@@ -4,7 +4,7 @@ from urllib.parse import quote, urlparse
 
 # Sử dụng curl_cffi để giả lập TLS fingerprint của trình duyệt thật, vượt Cloudflare
 from curl_cffi import requests as cffi_requests
-from curl_cffi.requests import RequestsError
+from curl_cffi.requests.exceptions import RequestException
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
@@ -18,8 +18,7 @@ BROWSER_HEADERS = {
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
     "Referer": "https://svxtract.com/",
-    "X-Requested-With": "XMLHttpRequest",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    "X-Requested-With": "XMLHttpRequest"
 }
 
 
@@ -54,15 +53,15 @@ def fetch_video():
             api_url, 
             headers=BROWSER_HEADERS, 
             impersonate="chrome124", 
-            timeout=20
+            timeout=15
         )
-    except RequestsError as exc:
+    except RequestException as exc:
         app.logger.warning("fetch-video request error: %s", exc)
         return jsonify({"error": "Không kết nối được tới nguồn video. Thử lại sau."}), 500
 
     if not upstream.ok:
         return jsonify({
-            "error": f"Nguồn trả lỗi (HTTP {upstream.status_code}). Bị Cloudflare chặn hoặc Token hết hạn."
+            "error": f"Nguồn trả lỗi (HTTP {upstream.status_code}). bị Cloudflare chặn hoặc Token hết hạn."
         }), 502
 
     try:
@@ -89,6 +88,7 @@ def download():
         return "Chỉ cho phép tải từ svxtract.com", 400
 
     try:
+        # Dùng impersonate cho cả tải video phòng trường hợp CDN chặn bot
         upstream = cffi_requests.get(
             url, 
             headers=BROWSER_HEADERS, 
@@ -96,7 +96,7 @@ def download():
             stream=True, 
             timeout=30
         )
-    except RequestsError:
+    except RequestException:
         return "Lỗi khi tải video.", 500
 
     if not upstream.ok:
